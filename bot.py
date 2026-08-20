@@ -1,4 +1,5 @@
 import os
+import base64
 import logging
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
@@ -20,15 +21,15 @@ client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 SYSTEM_PROMPT = (
     "You are a professional translator. Translate the given text into "
     "Karakalpak (Qaraqalpaq tili), using the Latin alphabet. "
-    "Reply with ONLY the translation itself — no extra commentary. "
-    "If the text is already in Karakalpak, polish it and correct any grammar mistakes."
+    "Reply with ONLY the translation itself — no explanations, no notes. "
+    "If the text is already in Karakalpak, politely say so in Karakalpak."
 )
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Assalawma áleykum! 👋\n\n"
-        "Men Qaraqalpaq awdarma botpan. Maǵan qálegen tildegi tekst yamasa dawıs "
+        "Men Qaraqalpaq awdarma botpan. Magan qálegen tildegi tekstti, dawıs yamasa súwretti "
         "jiberiń, men onı Qaraqalpaq tiline awdarıp beremen.\n\n"
         "Jaqsı, endi bir sóylem jiberiń! ✍️"
     )
@@ -36,7 +37,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Qálegen tildegi tekstti yamasa dawıs xabarındı jiberiń — men onı "
+        "Qálegen tildegi tekstti yamasa dawıstı jiberiń, men onı Qaraqalpaq tiline "
         "awdarıp beremen.\n\n"
         "Buyrıqlar:\n"
         "/start — botti qayta iske túsiriw\n"
@@ -44,7 +45,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def translate_text_and_reply(update: Update, user_text: str):
+async def translate_text_and_reply(update: Update, user_text):
     if not user_text or not user_text.strip():
         return
     try:
@@ -54,12 +55,12 @@ async def translate_text_and_reply(update: Update, user_text: str):
             system=SYSTEM_PROMPT,
             messages=[{"role": "user", "content": user_text}]
         )
-        translation = response.content[0].text.strip()
+        translation = response.content[0].text
         await update.message.reply_text(translation)
     except Exception as e:
         logger.error(f"Awdarıw qátesi: {e}")
         await update.message.reply_text(
-            "Keshirim, awdarıwda qátelik júz berdi. Qayta urınıp kóriń."
+            "Keshirim, awdarıwda qátelik júz berdi."
         )
 
 
@@ -98,11 +99,39 @@ async def translate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def translate_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    try:
+        photo = update.message.photo[-1]
+        file = await context.bot.get_file(photo.file_id)
+        photo_bytes = await file.download_as_bytearray()
+        image_data = base64.b64encode(photo_bytes).decode("utf-8")
+
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": image_data}},
+                    {"type": "text", "text": "Extract any text from this image and translate it into Karakalpak (Qaraqalpaq tili) using the Latin alphabet. Reply with ONLY the translation. If there is no text in the image, briefly describe what is shown, in Karakalpak."}
+                ]
+            }]
+        )
+        result = response.content[0].text
+        await update.message.reply_text(result)
+    except Exception as e:
+        logger.error(f"Súwret qátesi: {e}")
+        await update.message.reply_text(
+            "Keshirim, súwretti islew waqtında qátelik júz berdi."
+        )
+
+
 def main():
     if not TELEGRAM_TOKEN:
-        raise RuntimeError("TELEGRAM_TOKEN ortalıq ózgeriwshisi jоq")
+        raise RuntimeError("TELEGRAM_TOKEN ortalıq ózgeriwshisi joq")
     if not ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY ortalıq ózgeriwshisi jоq")
+        raise RuntimeError("ANTHROPIC_API_KEY ortalıq ózgeriwshisi joq")
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -110,6 +139,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, translate_message))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, translate_voice))
+    app.add_handler(MessageHandler(filters.PHOTO, translate_photo))
 
     logger.info("Bot iske tústi...")
     app.run_polling()
